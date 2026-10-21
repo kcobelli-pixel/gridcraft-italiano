@@ -209,8 +209,8 @@ jobs:
             # Checksums of the new files, plus the published ones they don't replace.
             sha256sum -- * > ../sums/new.txt
             : > ../sums/old.txt
-            if [ "$EXISTS" = "true" ]; then
-              gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -O ../sums/old.txt 2>/dev/null || : > ../sums/old.txt
+            if [ "$EXISTS" = "true" ] && gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS.txt; then
+              gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -O ../sums/old.txt --clobber
             fi
             awk 'NR == FNR { replaced[$2] = 1; next } !($2 in replaced)' ../sums/new.txt ../sums/old.txt > ../sums/kept.txt
             sort -k2 ../sums/kept.txt ../sums/new.txt > ../sums/SHA256SUMS.txt
@@ -224,6 +224,10 @@ jobs:
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GridCraft $TAG in italiano" --notes "$notes" --latest=false -- *
           fi
           if [ -f ../sums/SHA256SUMS.txt ]; then
+            # Every package on the release must keep its line, or its patch would read "not ready".
+            for a in $(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -vx -e SHA256SUMS.txt -e ITALIANO-UFFICIALE.txt); do
+              grep -q "  $a\$" ../sums/SHA256SUMS.txt || { echo "::error::SHA256SUMS.txt would miss $a"; exit 1; }
+            done
             gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- ../sums/SHA256SUMS.txt
           fi
           if [ "$BUILD_RESULT" != "success" ]; then
