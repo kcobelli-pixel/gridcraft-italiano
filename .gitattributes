@@ -2,3 +2,4 @@
 # one as ANSI and garbles the accents) and both Windows files use CRLF.
 *.ps1 -text
 *.cmd -text
+*.command -text

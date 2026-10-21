@@ -32,11 +32,33 @@ tocca niente: riprova più tardi.
 Per tornare alla versione ufficiale in inglese basta **Reinstalla** nel Launcher. Il Launcher
 continua a proporre gli aggiornamenti come sempre: dopo ognuno, riapplica la patch.
 
+## Mac
+
+Una volta sola: scarica `GridCraft-Italiano-Mac.zip` dalla stessa release
+[strumenti](../../releases/tag/strumenti) e aprilo: compare `Applica-italiano.command`. Mettilo
+dove preferisci, per esempio sul Desktop.
+
+Dopo ogni aggiornamento di GridCraft fatto con l'ArtCraft Launcher:
+
+1. chiudi GridCraft;
+2. fai doppio clic su `Applica-italiano.command`: si apre il Terminale e fa tutto da solo.
+
+La prima volta macOS non lo apre perché il file viene da internet: vai in Impostazioni di
+Sistema › Privacy e sicurezza, scorri in basso e scegli **Apri comunque**. Dalle volte
+successive si apre subito.
+
+Lo script fa le stesse cose della versione Windows: legge la versione installata, scarica il
+`.dmg` italiano della stessa versione, ne controlla l'impronta SHA-256, sostituisce l'app e
+imposta l'italiano (`~/Library/Application Support/GridCraft/ui.json`, con una copia
+`ui.json.bak`). L'app è firmata ad-hoc, non da ArtCraft: il Launcher la vede comunque come
+GridCraft aggiornato e al prossimo aggiornamento la sostituisce con quella ufficiale.
+
 ## Contenuto
 
 - `catalog/it.rs`: il catalogo italiano.
 - `add_italian.py`: aggiunge l'italiano al codice di una versione di GridCraft. Se un giorno
   GridCraft avrà l'italiano ufficiale, lo riconosce e non cambia niente.
 - `windows/`: la patch per Windows.
+- `mac/`: la patch per Mac.
 
 Il catalogo segue la licenza di GridCraft (MIT OR Apache-2.0).

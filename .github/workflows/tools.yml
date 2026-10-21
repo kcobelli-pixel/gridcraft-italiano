@@ -1,11 +1,11 @@
-# Keeps GridCraft-Italiano-Windows.zip (the two files the user double-clicks) in the "strumenti"
-# release, byte for byte as committed, whenever they change.
-name: Publish the Windows patch
+# Keeps the files the user double-clicks in the "strumenti" release, byte for byte as committed
+# (zip keeps the .command's executable bit), whenever they change.
+name: Publish the patches
 
 on:
   push:
     branches: [main]
-    paths: ['windows/**']
+    paths: ['windows/**', 'mac/**']
   workflow_dispatch:
 
 permissions: {}
@@ -23,10 +23,12 @@ jobs:
           persist-credentials: false
       - name: Zip and publish
         run: |
+          test -x mac/Applica-italiano.command
           zip -j -X GridCraft-Italiano-Windows.zip windows/Applica-italiano.cmd windows/GridCraft-Italiano.ps1
+          zip -j -X GridCraft-Italiano-Mac.zip mac/Applica-italiano.command
+          notes='Windows: scarica GridCraft-Italiano-Windows.zip, sbloccalo (tasto destro › Proprietà › Annulla blocco), estrailo e, dopo ogni aggiornamento di GridCraft, fai doppio clic su Applica-italiano.cmd. Mac: scarica GridCraft-Italiano-Mac.zip, aprilo e, dopo ogni aggiornamento, fai doppio clic su Applica-italiano.command (la prima volta macOS chiede conferma in Impostazioni di Sistema › Privacy e sicurezza › Apri comunque).'
           if ! gh release view strumenti -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create strumenti -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
-              --title 'Patch per Windows' \
-              --notes 'Scarica GridCraft-Italiano-Windows.zip, sbloccalo (tasto destro › Proprietà › Annulla blocco), estrailo e, dopo ogni aggiornamento di GridCraft, fai doppio clic su Applica-italiano.cmd.'
+            gh release create strumenti -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false --title 'Patch per Windows e Mac' --notes "$notes"
           fi
-          gh release upload strumenti GridCraft-Italiano-Windows.zip -R "$GITHUB_REPOSITORY" --clobber
+          gh release edit strumenti -R "$GITHUB_REPOSITORY" --title 'Patch per Windows e Mac' --notes "$notes"
+          gh release upload strumenti GridCraft-Italiano-Windows.zip GridCraft-Italiano-Mac.zip -R "$GITHUB_REPOSITORY" --clobber

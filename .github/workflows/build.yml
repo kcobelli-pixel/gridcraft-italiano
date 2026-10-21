@@ -1,6 +1,11 @@
 # Rebuilds each new GridCraft release (storytold/gridcraft) with the Italian catalog and publishes
-# the Windows x64 MSI and portable zip as a release of this repository, tagged like upstream.
-# windows/GridCraft-Italiano.ps1 installs the build matching the installed GridCraft version.
+# the Windows x64 MSI and portable zip and the macOS universal DMG as a release of this
+# repository, tagged like upstream. windows/GridCraft-Italiano.ps1 and mac/Applica-italiano.command
+# install the build matching the installed GridCraft version.
+#
+# A platform counts as published once SHA256SUMS.txt (always uploaded last) lists its package.
+# Only missing platforms are built, and one platform failing never holds back the other: the
+# next hourly run retries just the missing one.
 name: Build Italian GridCraft
 
 on:
@@ -26,8 +31,10 @@ jobs:
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
       build: ${{ steps.pick.outputs.build }}
+      exists: ${{ steps.pick.outputs.exists }}
+      matrix: ${{ steps.pick.outputs.matrix }}
     steps:
-      - name: Pick the tag
+      - name: Pick the tag and the missing platforms
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,21 +43,42 @@ jobs:
           tag="${INPUT_TAG:-$(gh release view -R storytold/gridcraft --json tagName --jq .tagName)}"
           # The tag comes from upstream: only plain release tags reach a shell or a file name.
           if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::unexpected tag '$tag'"; exit 1; fi
-          if err="$(gh release view "$tag" -R "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
-            build=false
-          elif [[ "$err" == *"release not found"* ]]; then
-            build=true
+          v="${tag#v}"
+          assets='' sums=''
+          if assets="$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/tmp/err)"; then
+            exists=true
+            sums="$(gh release download "$tag" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -O - 2>/dev/null)" || sums=''
+          elif grep -q 'release not found' /tmp/err; then
+            exists=false
           else
-            echo "::error::checking for $tag failed: $err"; exit 1
+            echo "::error::checking for $tag failed: $(cat /tmp/err)"; exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "GridCraft $tag: build=$build"
+          listed() { awk -v n="$1" 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && ($2 == n || $2 == "*" n) { f = 1 } END { exit !f }' <<<"$sums"; }
+          legs='[]'
+          if ! grep -qx 'ITALIANO-UFFICIALE.txt' <<<"$assets"; then
+            if ! listed "gridcraft-$v-windows-x64.msi"; then
+              legs="$(jq -c '. + [{"os": "windows-latest", "targets": "x86_64-pc-windows-msvc", "artifact": "release-windows-x64", "binary": "target/x86_64-pc-windows-msvc/release/gridcraft.exe"}]' <<<"$legs")"
+            fi
+            if ! listed "gridcraft-$v-macos-universal.dmg"; then
+              legs="$(jq -c '. + [{"os": "macos-15", "targets": "aarch64-apple-darwin, x86_64-apple-darwin", "artifact": "release-macos", "binary": "target/macos-package/GridCraft.app/Contents/MacOS/GridCraft"}]' <<<"$legs")"
+            fi
+          fi
+          build="$(jq -r 'if length > 0 then "true" else "false" end' <<<"$legs")"
+          {
+            echo "tag=$tag"
+            echo "build=$build"
+            echo "exists=$exists"
+            echo "matrix={\"include\":$legs}"
+          } >> "$GITHUB_OUTPUT"
+          echo "GridCraft $tag: exists=$exists, to build: $(jq -r 'map(.os) | join(", ")' <<<"$legs")"
 
-  windows-x64:
+  build:
     needs: plan
     if: needs.plan.outputs.build == 'true'
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -75,7 +103,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          python -I patch/add_italian.py gridcraft patch/catalog/it.rs
+          python3 -I patch/add_italian.py gridcraft patch/catalog/it.rs
           code=$?
           if [ "$code" -eq 3 ]; then echo "official=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           echo "official=false" >> "$GITHUB_OUTPUT"
@@ -100,54 +128,65 @@ jobs:
         if: steps.wire.outputs.official == 'false'
         with:
           toolchain: stable
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.wire.outputs.official == 'false'
         with:
           workspaces: gridcraft
       - name: Test the Italian wiring
-        if: steps.wire.outputs.official == 'false'
+        if: steps.wire.outputs.official == 'false' && runner.os == 'Windows'
         working-directory: gridcraft
         run: cargo test --locked -p gridcraft-ui-egui --lib -- i18n backstage
       - name: Install WiX
-        if: steps.wire.outputs.official == 'false'
+        if: steps.wire.outputs.official == 'false' && runner.os == 'Windows'
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
-      - name: Package (unsigned)
-        if: steps.wire.outputs.official == 'false'
+      - name: Package for Windows (unsigned)
+        if: steps.wire.outputs.official == 'false' && runner.os == 'Windows'
         shell: pwsh
-        # package.ps1 runs cargo in the current directory.
+        # The packaging scripts run cargo in the current directory.
         working-directory: gridcraft
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: '1'
         run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Package for macOS (ad-hoc signed)
+        if: steps.wire.outputs.official == 'false' && runner.os == 'macOS'
+        working-directory: gridcraft
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: '1'
+        run: packaging/macos/package.sh --arch universal
       - name: Check the build is Italian
         if: steps.wire.outputs.official == 'false'
         shell: bash
+        env:
+          BINARY: gridcraft/${{ matrix.binary }}
         run: |
-          exe="$(find gridcraft/target -path '*x86_64-pc-windows-msvc/release/gridcraft.exe' | head -n1)"
-          LC_ALL=C grep -a -q 'Italiano' "$exe" || { echo "::error::no Italian in $exe"; exit 1; }
+          LC_ALL=C grep -a -q 'Italiano' "$BINARY" || { echo "::error::no Italian in $BINARY"; exit 1; }
           ls -l gridcraft/dist/release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.wire.outputs.official == 'false'
         with:
-          name: release-windows-x64
+          name: ${{ matrix.artifact }}
           path: gridcraft/dist/release/*
           if-no-files-found: error
 
   release:
-    needs: [plan, windows-x64]
-    if: needs.plan.outputs.build == 'true' && needs.windows-x64.result == 'success'
+    needs: [plan, build]
+    # Also after a failed leg: whatever did build is published.
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.plan.outputs.tag }}
-      OFFICIAL: ${{ needs.windows-x64.outputs.official }}
+      EXISTS: ${{ needs.plan.outputs.exists }}
+      OFFICIAL: ${{ needs.build.outputs.official }}
+      BUILD_RESULT: ${{ needs.build.result }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -158,19 +197,42 @@ jobs:
           merge-multiple: true
       - name: Publish the release
         run: |
-          mkdir -p artifacts
-          cd artifacts
+          mkdir -p artifacts sums
+          notes="GridCraft $TAG ricompilato da storytold/gridcraft $TAG con il catalogo italiano di questo repository. Build non ufficiale e non firmata. Le frasi non ancora tradotte restano in inglese. Si installa con la patch della release strumenti (Windows: Applica-italiano.cmd; Mac: Applica-italiano.command)."
           if [ "$OFFICIAL" = "true" ]; then
-            echo "GridCraft $TAG ha già l'italiano ufficiale: scegli Italiano nel menu della lingua." > ITALIANO-UFFICIALE.txt
+            echo "GridCraft $TAG ha già l'italiano ufficiale: scegli Italiano nel menu della lingua." > artifacts/ITALIANO-UFFICIALE.txt
             notes="GridCraft $TAG include già l'italiano ufficiale: non serve nessuna patch."
-          else
-            sha256sum -- * | tee SHA256SUMS.txt
-            notes="GridCraft $TAG ricompilato da storytold/gridcraft $TAG con il catalogo italiano di questo repository. Build non ufficiale e non firmata. Le frasi non ancora tradotte restano in inglese. Si installa con windows/GridCraft-Italiano.ps1."
           fi
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GridCraft $TAG in italiano" --notes "$notes" --latest=false -- *
+          cd artifacts
+          if [ -z "$(ls)" ]; then echo "::error::nothing was built"; exit 1; fi
+          if [ "$OFFICIAL" != "true" ]; then
+            # Checksums of the new files, plus the published ones they don't replace.
+            sha256sum -- * > ../sums/new.txt
+            : > ../sums/old.txt
+            if [ "$EXISTS" = "true" ]; then
+              gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -O ../sums/old.txt 2>/dev/null || : > ../sums/old.txt
+            fi
+            awk 'NR == FNR { replaced[$2] = 1; next } !($2 in replaced)' ../sums/new.txt ../sums/old.txt > ../sums/kept.txt
+            sort -k2 ../sums/kept.txt ../sums/new.txt > ../sums/SHA256SUMS.txt
+            cat ../sums/SHA256SUMS.txt
+          fi
+          if [ "$EXISTS" = "true" ]; then
+            # Packages first and the checksums last: a download in between fails its hash check.
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- *
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$notes"
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GridCraft $TAG in italiano" --notes "$notes" --latest=false -- *
+          fi
+          if [ -f ../sums/SHA256SUMS.txt ]; then
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- ../sums/SHA256SUMS.txt
+          fi
+          if [ "$BUILD_RESULT" != "success" ]; then
+            echo "::error::a platform failed to build; the next run retries it"; exit 1
+          fi
       # shortcut: GitHub turns off scheduled workflows after 60 days without repository activity;
       # one commit per upstream release keeps it on while GridCraft keeps releasing.
       - name: Record the version
+        if: env.EXISTS == 'false'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

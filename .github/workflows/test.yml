@@ -1,7 +1,8 @@
-# End-to-end check of windows/GridCraft-Italiano.ps1 on a clean Windows runner: install the
+# End-to-end checks of both patches on clean runners. Windows: install the
 # official GridCraft MSI as the ArtCraft Launcher does, run the patch with Windows PowerShell 5.1,
-# then check the Italian build replaced it and only the language preference changed.
-name: Test the Windows patch
+# then check the Italian build replaced it and only the language preference changed. macOS: the
+# same with the official DMG's app in /Applications and mac/Applica-italiano.command.
+name: Test the patches
 
 on:
   workflow_dispatch:
@@ -13,7 +14,7 @@ on:
 permissions: {}
 
 jobs:
-  e2e:
+  windows:
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -84,3 +85,63 @@ jobs:
           if ($ui.language -ne 'it' -or $ui.systemTheme -ne $true) { throw "new ui.json: $(Get-Content $file -Raw)" }
           if (@(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'GridCraft').Count -ne 1) { throw 'a second run left two GridCraft entries' }
           Write-Output 'OK: second run, new ui.json follows the Windows theme'
+
+  # macOS: put the official DMG's app in /Applications as the launcher does, run the patch, check.
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      UI_DIR: ${{ github.workspace }}/home/Library/Application Support/GridCraft
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The script is executable
+        run: test -x mac/Applica-italiano.command
+      - name: Install the official GridCraft
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected tag $TAG"; exit 1; }
+          v="${TAG#v}"
+          gh release download "$TAG" -R storytold/gridcraft -p "gridcraft-$v-macos-universal.dmg" -p SHA256SUMS.txt -D official
+          (cd official && grep "  gridcraft-$v-macos-universal.dmg\$" SHA256SUMS.txt | shasum -a 256 -c -)
+          mkdir official/mnt
+          hdiutil attach -nobrowse -readonly -mountpoint official/mnt "official/gridcraft-$v-macos-universal.dmg"
+          ditto official/mnt/GridCraft.app /Applications/GridCraft.app
+          hdiutil detach official/mnt
+          codesign -dv /Applications/GridCraft.app 2>&1 | grep -q 'TeamIdentifier=DJ6XS33FX8'
+          if LC_ALL=C grep -a -q 'Italiano' /Applications/GridCraft.app/Contents/MacOS/GridCraft; then echo 'the official build already has Italian'; exit 1; fi
+      - name: Fake preferences saved by the official build
+        run: |
+          mkdir -p "$UI_DIR"
+          printf '\xef\xbb\xbf{\n  "dark": true,\n  "recent": [\n    "/Users/prova/conti.xlsx"\n  ],\n  "language": "en",\n  "interfaceScale": 125\n}' > "$UI_DIR/ui.json"
+      - name: Run the patch
+        run: HOME="$GITHUB_WORKSPACE/home" ./mac/Applica-italiano.command
+      - name: Check the result
+        run: |
+          v="${TAG#v}"
+          app=/Applications/GridCraft.app
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = ai.storyteller.gridcraft ]
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :GridCraftVersion' "$app/Contents/Info.plist")" = "$v" ]
+          LC_ALL=C grep -a -q 'Italiano' "$app/Contents/MacOS/GridCraft"
+          codesign --verify "$app"
+          if ls -d /Applications/.GridCraft-* 2>/dev/null; then echo 'left a temporary copy'; exit 1; fi
+          [ "$(head -c3 "$UI_DIR/ui.json" | xxd -p)" != efbbbf ]
+          test -f "$UI_DIR/ui.json.bak"
+          osascript -l JavaScript -e '
+            function run(argv) {
+              ObjC.import("Foundation");
+              const ui = JSON.parse($.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null).js);
+              if (ui.language !== "it" || ui.dark !== true || ui.interfaceScale !== 125 || ui.recent[0] !== "/Users/prova/conti.xlsx") throw new Error(JSON.stringify(ui));
+              return "OK: Italian build installed, language set, other preferences kept";
+            }' "$UI_DIR/ui.json"
+      - name: Run the patch again, with no ui.json yet
+        run: |
+          rm "$UI_DIR/ui.json"
+          HOME="$GITHUB_WORKSPACE/home" ./mac/Applica-italiano.command
+          grep -q '"systemTheme": true' "$UI_DIR/ui.json"
+          grep -q '"language": "it"' "$UI_DIR/ui.json"
+          echo 'OK: second run, new ui.json follows the system theme'

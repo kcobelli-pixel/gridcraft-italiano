@@ -40,6 +40,10 @@ function Fail([string] $Text, [int] $Code = 1) {
   exit $Code
 }
 
+function Fail-NotReady {
+  Fail "La versione italiana di GridCraft $version non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
+}
+
 function Assert-NotRunning {
   if (Get-Process -Name gridcraft -ErrorAction SilentlyContinue) {
     Fail 'GridCraft è aperto: chiudilo e riesegui la patch.'
@@ -74,14 +78,17 @@ function Assert-Hash([string] $File, [string] $SumsFile) {
       break
     }
   }
-  if (-not $expected) { Fail "SHA256SUMS.txt non elenca ${name}: non lo installo." }
+  # Not listed yet: the release is still being published.
+  if (-not $expected) { Fail-NotReady }
   $actual = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($actual -ne $expected) { Fail "Il file scaricato $name non corrisponde all'impronta pubblicata: non lo installo." }
+  if ($actual -ne $expected) {
+    Fail "Il file scaricato $name non corrisponde all'impronta pubblicata, quindi non lo installo. Se la versione italiana si stava aggiornando proprio ora, riprova tra qualche minuto."
+  }
 }
 
 function Save-Asset($Release, [string] $Name, [string] $Dir) {
   $asset = @($Release.assets) | Where-Object { $_.name -eq $Name } | Select-Object -First 1
-  if (-not $asset) { Fail "Nella versione italiana $($Release.tag_name) manca il file $Name." }
+  if (-not $asset) { Fail-NotReady }
   $url = [string] $asset.browser_download_url
   if (-not $url.StartsWith("https://github.com/$Repo/releases/download/")) { Fail "Indirizzo di download inatteso: $url" }
   $out = Join-Path $Dir $Name
@@ -169,15 +176,17 @@ try {
 } catch {
   $status = 0
   if ($_.Exception.Response) { $status = [int] $_.Exception.Response.StatusCode }
-  if ($status -eq 404) {
-    Fail "La versione italiana di GridCraft $version non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
-  }
+  if ($status -eq 404) { Fail-NotReady }
   Fail "Non riesco a contattare GitHub: $($_.Exception.Message)"
 }
 
+# build.yml publishes this marker instead of a build once upstream ships Italian itself.
 if (@($release.assets) | Where-Object { $_.name -eq 'ITALIANO-UFFICIALE.txt' }) {
-  Write-Host "GridCraft $version ha già l'italiano ufficiale: non serve installare niente."
+  $official = "Buone notizie: GridCraft $version è già in italiano nella versione ufficiale.`n`nLa patch non serve più: da ora puoi aggiornare GridCraft con il Launcher e usarlo così com'è."
+  Write-Host ''
+  Write-Host $official -ForegroundColor Green
   Set-LanguageOrWarn
+  try { $null = (New-Object -ComObject WScript.Shell).Popup($official, 0, 'GridCraft in italiano', 64) } catch { }
   exit 0
 }
 
