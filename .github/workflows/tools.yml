@@ -1,0 +1,32 @@
+# Keeps GridCraft-Italiano-Windows.zip (the two files the user double-clicks) in the "strumenti"
+# release, byte for byte as committed, whenever they change.
+name: Publish the Windows patch
+
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Zip and publish
+        run: |
+          zip -j -X GridCraft-Italiano-Windows.zip windows/Applica-italiano.cmd windows/GridCraft-Italiano.ps1
+          if ! gh release view strumenti -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create strumenti -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+              --title 'Patch per Windows' \
+              --notes 'Scarica GridCraft-Italiano-Windows.zip, sbloccalo (tasto destro › Proprietà › Annulla blocco), estrailo e, dopo ogni aggiornamento di GridCraft, fai doppio clic su Applica-italiano.cmd.'
+          fi
+          gh release upload strumenti GridCraft-Italiano-Windows.zip -R "$GITHUB_REPOSITORY" --clobber

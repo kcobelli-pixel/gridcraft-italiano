@@ -1,0 +1,4 @@
+# Kept byte for byte: the .ps1 is UTF-8 with a BOM (Windows PowerShell 5.1 reads a file without
+# one as ANSI and garbles the accents) and both Windows files use CRLF.
+*.ps1 -text
+*.cmd -text

@@ -1,0 +1,86 @@
+# End-to-end check of windows/GridCraft-Italiano.ps1 on a clean Windows runner: install the
+# official GridCraft MSI as the ArtCraft Launcher does, run the patch with Windows PowerShell 5.1,
+# then check the Italian build replaced it and only the language preference changed.
+name: Test the Windows patch
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'A tag this repository has built, e.g. v0.10.0'
+        required: true
+
+permissions: {}
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The script is UTF-8 with a BOM
+        shell: pwsh
+        run: |
+          $b = [IO.File]::ReadAllBytes('windows\GridCraft-Italiano.ps1')
+          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { throw 'GridCraft-Italiano.ps1 has no UTF-8 BOM: Windows PowerShell 5.1 would garble the accents' }
+      - name: Install the official GridCraft
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "unexpected tag $env:TAG" }
+          $v = $env:TAG.Substring(1)
+          gh release download $env:TAG -R storytold/gridcraft -p "gridcraft-$v-windows-x64.msi" -p SHA256SUMS.txt -D official
+          if ($LASTEXITCODE -ne 0) { throw 'download failed' }
+          $msi = Resolve-Path "official/gridcraft-$v-windows-x64.msi"
+          $want = (Select-String -Path official/SHA256SUMS.txt -Pattern "^([0-9a-f]{64})  gridcraft-$v-windows-x64\.msi$").Matches[0].Groups[1].Value
+          if ((Get-FileHash $msi).Hash.ToLower() -ne $want) { throw 'official MSI hash mismatch' }
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "official install failed: $($p.ExitCode)" }
+          $exe = 'C:\Program Files\GridCraft\gridcraft.exe'
+          if (Select-String -Path $exe -Pattern 'Italiano' -SimpleMatch -Quiet) { throw 'the official build already has Italian' }
+      - name: Fake preferences saved by the official build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:APPDATA\GridCraft" | Out-Null
+          $json = "{`n  `"dark`": true,`n  `"recent`": [`n    `"C:\\Users\\prova\\conti.xlsx`"`n  ],`n  `"language`": `"en`",`n  `"interfaceScale`": 125`n}"
+          # With a BOM, as PowerShell 5.1 writes it: the patch must write it back without one.
+          [IO.File]::WriteAllText("$env:APPDATA\GridCraft\ui.json", $json, (New-Object System.Text.UTF8Encoding($true)))
+      - name: Run the patch (Windows PowerShell 5.1)
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\GridCraft-Italiano.ps1
+      - name: Check the result
+        shell: pwsh
+        run: |
+          $v = $env:TAG.Substring(1)
+          $entries = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object DisplayName -eq 'GridCraft')
+          if ($entries.Count -ne 1) { throw "expected one GridCraft entry, found $($entries.Count)" }
+          if ($entries[0].DisplayVersion -ne $v -or $entries[0].Publisher -ne 'Learning Machines LLC') { throw "entry: $($entries[0].DisplayVersion) / $($entries[0].Publisher)" }
+          $exe = 'C:\Program Files\GridCraft\gridcraft.exe'
+          if (-not (Select-String -Path $exe -Pattern 'Italiano' -SimpleMatch -Quiet)) { throw 'gridcraft.exe is not the Italian build' }
+          $file = "$env:APPDATA\GridCraft\ui.json"
+          $bytes = [IO.File]::ReadAllBytes($file)
+          if ($bytes[0] -eq 0xEF) { throw 'ui.json has a BOM' }
+          $ui = Get-Content $file -Raw | ConvertFrom-Json
+          if ($ui.language -ne 'it' -or $ui.dark -ne $true -or $ui.interfaceScale -ne 125 -or $ui.recent[0] -ne 'C:\Users\prova\conti.xlsx') { throw "ui.json changed: $(Get-Content $file -Raw)" }
+          if (-not (Test-Path "$file.bak")) { throw 'no ui.json.bak' }
+          Write-Output 'OK: Italian build installed, language set, other preferences kept'
+      - name: Run the patch again, with no ui.json yet
+        shell: cmd
+        run: |
+          del "%APPDATA%\GridCraft\ui.json"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File windows\GridCraft-Italiano.ps1
+      - name: Check the new ui.json
+        shell: pwsh
+        run: |
+          $file = "$env:APPDATA\GridCraft\ui.json"
+          $ui = Get-Content $file -Raw | ConvertFrom-Json
+          if ($ui.language -ne 'it' -or $ui.systemTheme -ne $true) { throw "new ui.json: $(Get-Content $file -Raw)" }
+          if (@(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'GridCraft').Count -ne 1) { throw 'a second run left two GridCraft entries' }
+          Write-Output 'OK: second run, new ui.json follows the Windows theme'
