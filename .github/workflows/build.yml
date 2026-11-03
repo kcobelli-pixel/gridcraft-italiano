@@ -1,11 +1,15 @@
-# Rebuilds each new GridCraft release (storytold/gridcraft) with the Italian catalog and publishes
-# the Windows x64 MSI and portable zip and the macOS universal DMG as a release of this
-# repository, tagged like upstream. windows/GridCraft-Italiano.ps1 and mac/Applica-italiano.command
-# install the build matching the installed GridCraft version.
+# Rebuilds each new GridCraft release (storytold/gridcraft) with this repository's patches and
+# publishes the result as a release of this repository, tagged like upstream:
+#   Windows x64 (MSI, portable zip): the Italian catalog and the Brother print fix
+#     (apply_print_fix.sh of kcobelli-pixel/pdfcraft-stampa, the fix PdfCraft gets);
+#   macOS universal (DMG): the Italian catalog.
+# windows/GridCraft-Italiano.ps1 and mac/Applica-italiano.command install the build matching the
+# installed GridCraft version. ITALIANO-UFFICIALE.txt says upstream ships Italian itself, and a
+# platform whose patches are all official gets PATCH-UFFICIALE-<platform>.txt instead of a build.
 #
-# A platform counts as published once SHA256SUMS.txt (always uploaded last) lists its package.
-# Only missing platforms are built, and one platform failing never holds back the other: the
-# next hourly run retries just the missing one.
+# A platform counts as published once SHA256SUMS.txt (always uploaded last) lists its package, or
+# its marker is there. Only missing platforms are built, and one failing never holds back the
+# other: the next hourly run retries just the missing one.
 name: Build Italian GridCraft
 
 on:
@@ -55,13 +59,14 @@ jobs:
           fi
           listed() { awk -v n="$1" 'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && ($2 == n || $2 == "*" n) { f = 1 } END { exit !f }' <<<"$sums"; }
           legs='[]'
-          if ! grep -qx 'ITALIANO-UFFICIALE.txt' <<<"$assets"; then
-            if ! listed "gridcraft-$v-windows-x64.msi"; then
-              legs="$(jq -c '. + [{"os": "windows-latest", "targets": "x86_64-pc-windows-msvc", "artifact": "release-windows-x64", "binary": "target/x86_64-pc-windows-msvc/release/gridcraft.exe"}]' <<<"$legs")"
-            fi
-            if ! listed "gridcraft-$v-macos-universal.dmg"; then
-              legs="$(jq -c '. + [{"os": "macos-15", "targets": "aarch64-apple-darwin, x86_64-apple-darwin", "artifact": "release-macos", "binary": "target/macos-package/GridCraft.app/Contents/MacOS/GridCraft"}]' <<<"$legs")"
-            fi
+          # A Windows package counts once its receipt (PATCHES-windows.txt, the patches it has) is
+          # there too, so builds from before the print fix are made again.
+          if ! grep -qx PATCH-UFFICIALE-windows.txt <<<"$assets" &&
+            ! { grep -qx PATCHES-windows.txt <<<"$assets" && listed "gridcraft-$v-windows-x64.msi"; }; then
+            legs="$(jq -c '. + [{"os": "windows-latest", "platform": "windows", "targets": "x86_64-pc-windows-msvc", "artifact": "release-windows-x64", "binary": "target/x86_64-pc-windows-msvc/release/gridcraft.exe"}]' <<<"$legs")"
+          fi
+          if ! grep -qx PATCH-UFFICIALE-mac.txt <<<"$assets" && ! listed "gridcraft-$v-macos-universal.dmg"; then
+            legs="$(jq -c '. + [{"os": "macos-15", "platform": "mac", "targets": "aarch64-apple-darwin, x86_64-apple-darwin", "artifact": "release-macos", "binary": "target/macos-package/GridCraft.app/Contents/MacOS/GridCraft"}]' <<<"$legs")"
           fi
           build="$(jq -r 'if length > 0 then "true" else "false" end' <<<"$legs")"
           {
@@ -70,7 +75,7 @@ jobs:
             echo "exists=$exists"
             echo "matrix={\"include\":$legs}"
           } >> "$GITHUB_OUTPUT"
-          echo "GridCraft $tag: exists=$exists, to build: $(jq -r 'map(.os) | join(", ")' <<<"$legs")"
+          echo "GridCraft $tag: exists=$exists, to build: $(jq -r 'map(.platform) | join(", ")' <<<"$legs")"
 
   build:
     needs: plan
@@ -82,11 +87,10 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
-    outputs:
-      official: ${{ steps.wire.outputs.official }}
     env:
       CARGO_INCREMENTAL: 0
       CARGO_TERM_COLOR: always
+      PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,19 +102,37 @@ jobs:
           ref: ${{ needs.plan.outputs.tag }}
           path: gridcraft
           persist-credentials: false
-      - name: Wire Italian
-        id: wire
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.platform == 'windows'
+        with:
+          repository: kcobelli-pixel/pdfcraft-stampa
+          path: stampa
+          persist-credentials: false
+      # Before the patches: the print fix runs cargo.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.targets }}
+      - name: Apply the patches
+        id: fix
         shell: bash
         run: |
           set +e
-          python3 -I patch/add_italian.py gridcraft patch/catalog/it.rs
-          code=$?
-          if [ "$code" -eq 3 ]; then echo "official=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          echo "official=false" >> "$GITHUB_OUTPUT"
-          exit "$code"
+          fixes='' official=false
+          python3 -I patch/add_italian.py gridcraft patch/catalog/it.rs; code=$?
+          if [ "$code" -eq 0 ]; then fixes=italian; elif [ "$code" -eq 3 ]; then official=true; else exit "$code"; fi
+          # The print fix is for Windows drivers only.
+          if [ "$PLATFORM" = windows ]; then
+            bash stampa/apply_print_fix.sh gridcraft; code=$?
+            if [ "$code" -eq 0 ]; then fixes="$fixes print"; elif [ "$code" -ne 3 ]; then exit "$code"; fi
+          fi
+          fixes="${fixes# }"
+          echo "fixes=$fixes" >> "$GITHUB_OUTPUT"
+          echo "official=$official" >> "$GITHUB_OUTPUT"
+          echo "patches applied: ${fixes:-none}"
       - name: Read the craft-fonts pin
         id: fonts
-        if: steps.wire.outputs.official == 'false'
+        if: steps.fix.outputs.fixes != ''
         shell: bash
         run: |
           # Only the 40 hex digits: a CRLF checkout, quotes or a comment can't leak into the ref.
@@ -118,33 +140,28 @@ jobs:
           if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::unexpected craft-fonts-ref '$ref'"; exit 1; fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.wire.outputs.official == 'false'
+        if: steps.fix.outputs.fixes != ''
         with:
           repository: storytold/craft-fonts
           ref: ${{ steps.fonts.outputs.ref }}
           path: craft-fonts
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        if: steps.wire.outputs.official == 'false'
-        with:
-          toolchain: stable
-          targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.wire.outputs.official == 'false'
+        if: steps.fix.outputs.fixes != ''
         with:
           workspaces: gridcraft
       - name: Test the Italian wiring
-        if: steps.wire.outputs.official == 'false' && runner.os == 'Windows'
+        if: contains(steps.fix.outputs.fixes, 'italian') && runner.os == 'Windows'
         working-directory: gridcraft
         run: cargo test --locked -p gridcraft-ui-egui --lib -- i18n backstage
       - name: Install WiX
-        if: steps.wire.outputs.official == 'false' && runner.os == 'Windows'
+        if: steps.fix.outputs.fixes != '' && runner.os == 'Windows'
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
       - name: Package for Windows (unsigned)
-        if: steps.wire.outputs.official == 'false' && runner.os == 'Windows'
+        if: steps.fix.outputs.fixes != '' && runner.os == 'Windows'
         shell: pwsh
         # The packaging scripts run cargo in the current directory.
         working-directory: gridcraft
@@ -153,22 +170,47 @@ jobs:
           CRAFT_FONTS_REQUIRED: '1'
         run: ./packaging/windows/package.ps1 -Arch x64
       - name: Package for macOS (ad-hoc signed)
-        if: steps.wire.outputs.official == 'false' && runner.os == 'macOS'
+        if: steps.fix.outputs.fixes != '' && runner.os == 'macOS'
         working-directory: gridcraft
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: '1'
         run: packaging/macos/package.sh --arch universal
-      - name: Check the build is Italian
-        if: steps.wire.outputs.official == 'false'
+      - name: Check the build has the patches
+        if: steps.fix.outputs.fixes != ''
         shell: bash
         env:
           BINARY: gridcraft/${{ matrix.binary }}
+          FIXES: ${{ steps.fix.outputs.fixes }}
         run: |
-          LC_ALL=C grep -a -q 'Italiano' "$BINARY" || { echo "::error::no Italian in $BINARY"; exit 1; }
+          # Strings only the patched code carries: the language's name and the GDI retry's receipt.
+          for fix in $FIXES; do
+            case "$fix" in
+              italian) mark='Italiano' ;;
+              print) mark='through GDI' ;;
+            esac
+            LC_ALL=C grep -a -q "$mark" "$BINARY" || { echo "::error::$fix patch missing from $BINARY"; exit 1; }
+          done
           ls -l gridcraft/dist/release
+      # After packaging, which owns dist/release.
+      - name: Write the receipt and the markers
+        shell: bash
+        env:
+          FIXES: ${{ steps.fix.outputs.fixes }}
+          OFFICIAL: ${{ steps.fix.outputs.official }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          out=gridcraft/dist/release
+          mkdir -p "$out"
+          if [ "$OFFICIAL" = true ]; then
+            echo "GridCraft $TAG ha già l'italiano ufficiale: scegli Italiano nel menu della lingua." > "$out/ITALIANO-UFFICIALE.txt"
+          fi
+          if [ -n "$FIXES" ]; then
+            printf '%s\n' $FIXES > "$out/PATCHES-$PLATFORM.txt"
+          else
+            echo "GridCraft $TAG contiene già tutto quello che aggiungeva la patch: non serve più." > "$out/PATCH-UFFICIALE-$PLATFORM.txt"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.wire.outputs.official == 'false'
         with:
           name: ${{ matrix.artifact }}
           path: gridcraft/dist/release/*
@@ -185,12 +227,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.plan.outputs.tag }}
       EXISTS: ${{ needs.plan.outputs.exists }}
-      OFFICIAL: ${{ needs.build.outputs.official }}
       BUILD_RESULT: ${{ needs.build.result }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: env.OFFICIAL == 'false'
         with:
           pattern: release-*
           path: artifacts
@@ -198,16 +238,18 @@ jobs:
       - name: Publish the release
         run: |
           mkdir -p artifacts sums
-          notes="GridCraft $TAG ricompilato da storytold/gridcraft $TAG con il catalogo italiano di questo repository. Build non ufficiale e non firmata. Le frasi non ancora tradotte restano in inglese. Si installa con la patch della release strumenti (Windows: Applica-italiano.cmd; Mac: Applica-italiano.command)."
-          if [ "$OFFICIAL" = "true" ]; then
-            echo "GridCraft $TAG ha già l'italiano ufficiale: scegli Italiano nel menu della lingua." > artifacts/ITALIANO-UFFICIALE.txt
-            notes="GridCraft $TAG include già l'italiano ufficiale: non serve nessuna patch."
-          fi
+          brother='la correzione per le stampanti Brother (se il driver rifiuta la stampa XPS, errore 0x80040003 "Interfaccia non supportata", il documento viene stampato tramite GDI)'
+          notes="GridCraft $TAG ricompilato da storytold/gridcraft $TAG con il catalogo italiano di questo repository (le frasi non ancora tradotte restano in inglese) e, su Windows, $brother. Build non ufficiali e non firmate. Si installano con la patch della release strumenti (Windows: Applica-italiano.cmd; Mac: Applica-italiano.command)."
           cd artifacts
           if [ -z "$(ls)" ]; then echo "::error::nothing was built"; exit 1; fi
-          if [ "$OFFICIAL" != "true" ]; then
-            # Checksums of the new files, plus the published ones they don't replace.
-            sha256sum -- * > ../sums/new.txt
+          if [ -f ITALIANO-UFFICIALE.txt ]; then
+            notes="GridCraft $TAG include già l'italiano ufficiale: su Windows la patch aggiunge solo $brother."
+            [ ! -f PATCH-UFFICIALE-windows.txt ] || notes="GridCraft $TAG include già ufficialmente l'italiano e la correzione della stampa: non serve nessuna patch."
+          fi
+          packages="$(ls | grep -v -e '^ITALIANO-UFFICIALE\.txt$' -e '^PATCH-UFFICIALE-' -e '^PATCHES-' || true)"
+          if [ -n "$packages" ]; then
+            # Checksums of the new packages, plus the published ones they don't replace.
+            sha256sum -- $packages > ../sums/new.txt
             : > ../sums/old.txt
             if [ "$EXISTS" = "true" ] && gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS.txt; then
               gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS.txt -O ../sums/old.txt --clobber
@@ -225,7 +267,7 @@ jobs:
           fi
           if [ -f ../sums/SHA256SUMS.txt ]; then
             # Every package on the release must keep its line, or its patch would read "not ready".
-            for a in $(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -vx -e SHA256SUMS.txt -e ITALIANO-UFFICIALE.txt); do
+            for a in $(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -vx -e SHA256SUMS.txt -e ITALIANO-UFFICIALE.txt -e 'PATCH-UFFICIALE-.*' -e 'PATCHES-.*'); do
               grep -q "  $a\$" ../sums/SHA256SUMS.txt || { echo "::error::SHA256SUMS.txt would miss $a"; exit 1; }
             done
             gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- ../sums/SHA256SUMS.txt

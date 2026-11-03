@@ -1,12 +1,13 @@
 ﻿<#
-  GridCraft in italiano, per Windows.
+  GridCraft in italiano, per Windows, con la correzione della stampa per le stampanti Brother
+  (errore 0x80040003 "Interfaccia non supportata": il documento viene stampato tramite GDI).
 
   Dopo ogni aggiornamento di GridCraft fatto con l'ArtCraft Launcher, esegui Applica-italiano.cmd.
   Lo script:
     1. legge la versione di GridCraft installata;
-    2. scarica da github.com/kcobelli-pixel/gridcraft-italiano la build italiana della stessa
+    2. scarica da github.com/kcobelli-pixel/gridcraft-italiano la build con la patch della stessa
        versione e ne controlla l'impronta SHA-256;
-    3. la installa al posto di quella inglese (Windows chiede il permesso di amministratore);
+    3. la installa al posto di quella ufficiale (Windows chiede il permesso di amministratore);
     4. imposta l'italiano come lingua dell'interfaccia (ui.json, con una copia ui.json.bak).
   Le frasi non ancora tradotte restano in inglese. Per tornare alla versione ufficiale basta
   "Reinstalla" nel Launcher, o il prossimo aggiornamento.
@@ -41,7 +42,7 @@ function Fail([string] $Text, [int] $Code = 1) {
 }
 
 function Fail-NotReady {
-  Fail "La versione italiana di GridCraft $version non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
+  Fail "La versione di GridCraft $version con la patch non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
 }
 
 function Assert-NotRunning {
@@ -82,7 +83,7 @@ function Assert-Hash([string] $File, [string] $SumsFile) {
   if (-not $expected) { Fail-NotReady }
   $actual = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne $expected) {
-    Fail "Il file scaricato $name non corrisponde all'impronta pubblicata, quindi non lo installo. Se la versione italiana si stava aggiornando proprio ora, riprova tra qualche minuto."
+    Fail "Il file scaricato $name non corrisponde all'impronta pubblicata, quindi non lo installo. Se la versione con la patch si stava aggiornando proprio ora, riprova tra qualche minuto."
   }
 }
 
@@ -180,9 +181,12 @@ try {
   Fail "Non riesco a contattare GitHub: $($_.Exception.Message)"
 }
 
-# build.yml publishes this marker instead of a build once upstream ships Italian itself.
-if (@($release.assets) | Where-Object { $_.name -eq 'ITALIANO-UFFICIALE.txt' }) {
-  $official = "Buone notizie: GridCraft $version è già in italiano nella versione ufficiale.`n`nLa patch non serve più: da ora puoi aggiornare GridCraft con il Launcher e usarlo così com'è."
+# build.yml publishes PATCH-UFFICIALE-windows.txt instead of a build once upstream ships all the
+# patch adds, and ITALIANO-UFFICIALE.txt once it ships Italian (the build keeps the print fix).
+$assetNames = @(@($release.assets) | ForEach-Object { [string] $_.name })
+$italianOfficial = $assetNames -contains 'ITALIANO-UFFICIALE.txt'
+if ($assetNames -contains 'PATCH-UFFICIALE-windows.txt') {
+  $official = "Buone notizie: GridCraft $version contiene già ufficialmente tutto quello che aggiungeva la patch (l'italiano e la correzione della stampa).`n`nLa patch non serve più: da ora puoi aggiornare GridCraft con il Launcher e usarlo così com'è."
   Write-Host ''
   Write-Host $official -ForegroundColor Green
   Set-LanguageOrWarn
@@ -192,7 +196,7 @@ if (@($release.assets) | Where-Object { $_.name -eq 'ITALIANO-UFFICIALE.txt' }) 
 
 $script:Tmp = Join-Path ([IO.Path]::GetTempPath()) ('gridcraft-italiano-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $script:Tmp | Out-Null
-Write-Host 'Scarico la versione italiana...'
+Write-Host 'Scarico la versione con la patch...'
 $sums = Save-Asset $release 'SHA256SUMS.txt' $script:Tmp
 
 if ($mode -eq 'msi') {
@@ -203,14 +207,14 @@ if ($mode -eq 'msi') {
   $folder = Get-MsiFolder
   if ($folder) { $msiArgs += "INSTALLFOLDER=`"$folder`"" }
   Assert-NotRunning
-  Write-Host 'Installo la versione italiana: se Windows chiede il permesso, rispondi Sì.'
+  Write-Host 'Installo la versione con la patch: se Windows chiede il permesso, rispondi Sì.'
   $msiexec = Join-Path $env:SystemRoot 'System32\msiexec.exe'
   $process = Start-Process -FilePath $msiexec -ArgumentList $msiArgs -Wait -PassThru
   switch ($process.ExitCode) {
     0 { }
     3010 { Write-Host 'Windows chiede di riavviare il PC per completare l''installazione.' -ForegroundColor Yellow }
     1641 { }
-    1602 { Fail 'Installazione annullata: GridCraft resta in inglese.' }
+    1602 { Fail 'Installazione annullata: GridCraft resta com''era.' }
     1618 { Fail 'Un''altra installazione è in corso: aspetta che finisca e riesegui la patch.' }
     default { Fail "L'installazione non è riuscita (codice $($process.ExitCode)). Il registro è in $InstallLog" }
   }
@@ -236,6 +240,10 @@ if ($mode -eq 'msi') {
 Set-LanguageOrWarn
 Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
-Write-Host "Fatto: GridCraft $version è in italiano. Le frasi non ancora tradotte restano in inglese." -ForegroundColor Green
+if ($italianOfficial) {
+  Write-Host "Fatto: GridCraft $version ha la correzione della stampa per le stampanti Brother che davano l'errore 0x80040003. L'italiano invece è già ufficiale: la patch serve solo per la stampa." -ForegroundColor Green
+} else {
+  Write-Host "Fatto: GridCraft $version è in italiano (le frasi non ancora tradotte restano in inglese) e ha la correzione della stampa per le stampanti Brother che davano l'errore 0x80040003." -ForegroundColor Green
+}
 Write-Host 'Dopo il prossimo aggiornamento di GridCraft riesegui Applica-italiano.cmd.'
 exit 0

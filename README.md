@@ -1,9 +1,15 @@
 # GridCraft in italiano
 
-[GridCraft](https://github.com/storytold/gridcraft) non ha ancora l'italiano nelle versioni
-ufficiali. Questo repository ricompila ogni nuova versione con un catalogo italiano
-(`catalog/it.rs`, 971 voci) e la pubblica tra le [release](../../releases). Le frasi non ancora
-tradotte restano in inglese.
+Questo repository ricompila ogni nuova versione di [GridCraft](https://github.com/storytold/gridcraft)
+con le sue patch e la pubblica tra le [release](../../releases):
+
+- **l'italiano**, per le versioni che non lo hanno ufficialmente (catalogo `catalog/it.rs`, 971
+  voci; le frasi non ancora tradotte restano in inglese). Dalla 0.16.0 GridCraft è in italiano
+  ufficialmente: le patch lo riconoscono e lo dicono, e su Mac non serve più niente;
+- **su Windows, la correzione della stampa per le stampanti Brother** (per esempio la
+  MFC-L3760CDW): se il driver rifiuta la stampa con l'errore 0x80040003 ("Interfaccia non
+  supportata"), il documento viene stampato tramite GDI. È la stessa correzione della patch di
+  PdfCraft ([pdfcraft-stampa](https://github.com/kcobelli-pixel/pdfcraft-stampa)).
 
 Sono build **non ufficiali e non firmate**, fatte da GitHub Actions a partire dal codice
 pubblico di storytold/gridcraft (`.github/workflows/build.yml`). Il controllo avviene ogni ora:
@@ -24,10 +30,10 @@ Dopo ogni aggiornamento di GridCraft fatto con l'ArtCraft Launcher:
 3. quando Windows chiede il permesso di installare, rispondi **Sì** (l'autore risulta
    sconosciuto perché la build non è firmata).
 
-Lo script legge la versione installata, scarica la build italiana della stessa versione, ne
-controlla l'impronta SHA-256, la installa e imposta l'italiano nelle preferenze (`ui.json`,
-con una copia `ui.json.bak`). Se la versione italiana non è ancora pronta, te lo dice e non
-tocca niente: riprova più tardi.
+Lo script legge la versione installata, scarica la build con la patch della stessa versione
+(italiano e correzione della stampa), ne controlla l'impronta SHA-256, la installa e imposta
+l'italiano nelle preferenze (`ui.json`, con una copia `ui.json.bak`). Se la build non è ancora
+pronta, te lo dice e non tocca niente: riprova più tardi.
 
 Per tornare alla versione ufficiale in inglese basta **Reinstalla** nel Launcher. Il Launcher
 continua a proporre gli aggiornamenti come sempre: dopo ognuno, riapplica la patch.
@@ -58,7 +64,9 @@ GridCraft aggiornato e al prossimo aggiornamento la sostituisce con quella uffic
 - `catalog/it.rs`: il catalogo italiano.
 - `add_italian.py`: aggiunge l'italiano al codice di una versione di GridCraft. Se un giorno
   GridCraft avrà l'italiano ufficiale, lo riconosce e non cambia niente.
-- `windows/`: la patch per Windows.
+- `windows/`: la patch per Windows. La correzione della stampa viene applicata in fase di build
+  con `apply_print_fix.sh` di pdfcraft-stampa: se un giorno GridCraft la avrà ufficialmente, la
+  build per Windows avrà solo l'italiano.
 - `mac/`: la patch per Mac.
 
 Il catalogo segue la licenza di GridCraft (MIT OR Apache-2.0).
