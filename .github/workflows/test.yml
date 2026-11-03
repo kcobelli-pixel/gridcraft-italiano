@@ -42,9 +42,10 @@ jobs:
           $msi = Resolve-Path "official/gridcraft-$v-windows-x64.msi"
           $want = (Select-String -Path official/SHA256SUMS.txt -Pattern "^([0-9a-f]{64})  gridcraft-$v-windows-x64\.msi$").Matches[0].Groups[1].Value
           if ((Get-FileHash $msi).Hash.ToLower() -ne $want) { throw 'official MSI hash mismatch' }
-          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+          # For everyone in Program Files\GridCraft, as the Launcher installed it before 0.16.0: from
+          # 0.16.0 a silent install is per-user by default, and one for everyone defaults to ArtCraft\GridCraft.
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart ALLUSERS=1 INSTALLFOLDER=`"C:\Program Files\GridCraft`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "official install failed: $($p.ExitCode)" }
-          # Where the MSI put it (Program Files\ArtCraft\GridCraft since 0.16.0), as the patch reads it.
           $exe = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe').'(default)'.Trim('"')
           if (-not (Test-Path -LiteralPath $exe)) { throw "no gridcraft.exe at $exe" }
           if (Select-String -Path $exe -Pattern 'through GDI' -SimpleMatch -Quiet) { throw 'the official build already has the print fix' }
@@ -68,6 +69,7 @@ jobs:
           if ($entries[0].DisplayVersion -ne $v -or $entries[0].Publisher -ne 'Learning Machines LLC') { throw "entry: $($entries[0].DisplayVersion) / $($entries[0].Publisher)" }
           $exe = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe').'(default)'.Trim('"')
           if (-not (Test-Path -LiteralPath $exe)) { throw "no gridcraft.exe at $exe" }
+          if ($exe -ne 'C:\Program Files\GridCraft\gridcraft.exe') { throw "the patch moved GridCraft to $exe" }
           if (-not (Select-String -Path $exe -Pattern 'Italiano' -SimpleMatch -Quiet)) { throw 'gridcraft.exe is not the Italian build' }
           if (-not (Select-String -Path $exe -Pattern 'through GDI' -SimpleMatch -Quiet)) { throw 'gridcraft.exe has no print fix' }
           $file = "$env:APPDATA\GridCraft\ui.json"
