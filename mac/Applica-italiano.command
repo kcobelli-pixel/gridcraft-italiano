@@ -120,20 +120,19 @@ echo "GridCraft installato: versione $VERSION ($APP)"
 assert_not_running
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/gridcraft-italiano.XXXXXX")"
+# build.yml publishes this marker once upstream ships Italian itself. A Mac then has nothing to
+# install, even when the release carries a Windows build (with the print fix) and its checksums.
+if [ "$(fetch ITALIANO-UFFICIALE.txt)" = 200 ]; then
+  official="Buone notizie: GridCraft $VERSION è già in italiano nella versione ufficiale. La patch non serve più: da ora puoi aggiornare GridCraft con il Launcher e usarlo così com'è."
+  printf '\n\033[32m%s\033[0m\n' "$official"
+  set_language
+  osascript -e 'on run argv' -e 'display dialog (item 1 of argv) with title "GridCraft in italiano" buttons {"OK"} default button 1 with icon note' -e 'end run' "$official" >/dev/null 2>&1 || true
+  exit 0
+fi
 echo 'Scarico la versione italiana...'
 status="$(fetch SHA256SUMS.txt)"
-if [ "$status" != 200 ]; then
-  # build.yml publishes this marker instead of a build once upstream ships Italian itself.
-  if [ "$(fetch ITALIANO-UFFICIALE.txt)" = 200 ]; then
-    official="Buone notizie: GridCraft $VERSION è già in italiano nella versione ufficiale. La patch non serve più: da ora puoi aggiornare GridCraft con il Launcher e usarlo così com'è."
-    printf '\n\033[32m%s\033[0m\n' "$official"
-    set_language
-    osascript -e 'on run argv' -e 'display dialog (item 1 of argv) with title "GridCraft in italiano" buttons {"OK"} default button 1 with icon note' -e 'end run' "$official" >/dev/null 2>&1 || true
-    exit 0
-  fi
-  [ "$status" != 404 ] || fail_not_ready
-  fail "Non riesco a contattare GitHub (risposta: $status). Controlla la connessione e riprova."
-fi
+[ "$status" != 404 ] || fail_not_ready
+[ "$status" = 200 ] || fail "Non riesco a contattare GitHub (risposta: $status). Controlla la connessione e riprova."
 
 DMG="gridcraft-$VERSION-macos-universal.dmg"
 status="$(fetch "$DMG")"

@@ -41,7 +41,13 @@ function Fail([string] $Text, [int] $Code = 1) {
   exit $Code
 }
 
+# Builds are made only for the newest GridCraft: an older one without a build is told to update.
 function Fail-NotReady {
+  $latest = $null
+  try { $latest = [string] (Invoke-RestMethod -Uri 'https://api.github.com/repos/storytold/gridcraft/releases/latest' -Headers $Headers).tag_name } catch { }
+  if ($latest -match '^v?(\d+\.\d+\.\d+)$' -and $Matches[1] -ne $version) {
+    Fail "C'è una versione più recente di GridCraft ($($Matches[1])): aggiornalo con l'ArtCraft Launcher, poi riesegui la patch. La patch viene preparata solo per l'ultima versione." 2
+  }
   Fail "La versione di GridCraft $version con la patch non è ancora pronta. Viene preparata in automatico entro qualche ora da ogni aggiornamento: riprova più tardi." 2
 }
 
@@ -242,8 +248,11 @@ Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContin
 Write-Host ''
 if ($italianOfficial) {
   Write-Host "Fatto: GridCraft $version ha la correzione della stampa per le stampanti Brother che davano l'errore 0x80040003. L'italiano invece è già ufficiale: la patch serve solo per la stampa." -ForegroundColor Green
-} else {
+} elseif ($assetNames -contains 'PATCHES-windows.txt') {
   Write-Host "Fatto: GridCraft $version è in italiano (le frasi non ancora tradotte restano in inglese) e ha la correzione della stampa per le stampanti Brother che davano l'errore 0x80040003." -ForegroundColor Green
+} else {
+  # A build from before the print fix.
+  Write-Host "Fatto: GridCraft $version è in italiano. Le frasi non ancora tradotte restano in inglese." -ForegroundColor Green
 }
 Write-Host 'Dopo il prossimo aggiornamento di GridCraft riesegui Applica-italiano.cmd.'
 exit 0

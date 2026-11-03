@@ -242,11 +242,18 @@ jobs:
           notes="GridCraft $TAG ricompilato da storytold/gridcraft $TAG con il catalogo italiano di questo repository (le frasi non ancora tradotte restano in inglese) e, su Windows, $brother. Build non ufficiali e non firmate. Si installano con la patch della release strumenti (Windows: Applica-italiano.cmd; Mac: Applica-italiano.command)."
           cd artifacts
           if [ -z "$(ls)" ]; then echo "::error::nothing was built"; exit 1; fi
-          if [ -f ITALIANO-UFFICIALE.txt ]; then
+          # Markers already on the release count too: a retry may bring only one platform's.
+          existing=''
+          if [ "$EXISTS" = "true" ]; then existing="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"; fi
+          has() { [ -f "$1" ] || grep -qx "$1" <<<"$existing"; }
+          if has ITALIANO-UFFICIALE.txt; then
             notes="GridCraft $TAG include già l'italiano ufficiale: su Windows la patch aggiunge solo $brother."
-            [ ! -f PATCH-UFFICIALE-windows.txt ] || notes="GridCraft $TAG include già ufficialmente l'italiano e la correzione della stampa: non serve nessuna patch."
+            if has PATCH-UFFICIALE-windows.txt; then notes="GridCraft $TAG include già ufficialmente l'italiano e la correzione della stampa: non serve nessuna patch."; fi
           fi
           packages="$(ls | grep -v -e '^ITALIANO-UFFICIALE\.txt$' -e '^PATCH-UFFICIALE-' -e '^PATCHES-' || true)"
+          # A receipt says its package is fully published, so it goes up after the checksums.
+          receipts="$(ls | grep '^PATCHES-' || true)"
+          others="$(ls | grep -v '^PATCHES-' || true)"
           if [ -n "$packages" ]; then
             # Checksums of the new packages, plus the published ones they don't replace.
             sha256sum -- $packages > ../sums/new.txt
@@ -260,10 +267,10 @@ jobs:
           fi
           if [ "$EXISTS" = "true" ]; then
             # Packages first and the checksums last: a download in between fails its hash check.
-            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- *
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- $others
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$notes"
           else
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GridCraft $TAG in italiano" --notes "$notes" --latest=false -- *
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GridCraft $TAG in italiano" --notes "$notes" --latest=false -- $others
           fi
           if [ -f ../sums/SHA256SUMS.txt ]; then
             # Every package on the release must keep its line, or its patch would read "not ready".
@@ -272,6 +279,7 @@ jobs:
             done
             gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- ../sums/SHA256SUMS.txt
           fi
+          if [ -n "$receipts" ]; then gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- $receipts; fi
           if [ "$BUILD_RESULT" != "success" ]; then
             echo "::error::a platform failed to build; the next run retries it"; exit 1
           fi

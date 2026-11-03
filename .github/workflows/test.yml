@@ -102,18 +102,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Is there anything to install?
-        id: need
+      - name: Is Italian official in this version?
+        id: release
         run: |
-          # With Italian official the Mac patch only says so (in a dialog that would hang here).
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx ITALIANO-UFFICIALE.txt; then
-            echo "::notice::GridCraft $TAG is officially Italian: the Mac patch installs nothing, so there is nothing to test"
-            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'official=true' >> "$GITHUB_OUTPUT"
           fi
+      - name: Answer the patch's dialog at once
+        run: |
+          # The dialog the patch shows when Italian is official would wait for a click forever here.
+          mkdir -p "$RUNNER_TEMP/stub"
+          printf '%s\n' '#!/bin/bash' 'case "$*" in *"display dialog"*) exit 0 ;; esac' 'exec /usr/bin/osascript "$@"' > "$RUNNER_TEMP/stub/osascript"
+          chmod +x "$RUNNER_TEMP/stub/osascript"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
       - name: The script is executable
         run: test -x mac/Applica-italiano.command
       - name: Install the official GridCraft
-        if: steps.need.outputs.skip != 'true'
+        env:
+          OFFICIAL: ${{ steps.release.outputs.official }}
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected tag $TAG"; exit 1; }
           v="${TAG#v}"
@@ -124,17 +130,16 @@ jobs:
           ditto official/mnt/GridCraft.app /Applications/GridCraft.app
           hdiutil detach official/mnt
           codesign -dv /Applications/GridCraft.app 2>&1 | grep -q 'TeamIdentifier=DJ6XS33FX8'
-          if LC_ALL=C grep -a -q 'Italiano' /Applications/GridCraft.app/Contents/MacOS/GridCraft; then echo 'the official build already has Italian'; exit 1; fi
+          if [ "$OFFICIAL" != true ] && LC_ALL=C grep -a -q 'Italiano' /Applications/GridCraft.app/Contents/MacOS/GridCraft; then echo 'the official build already has Italian'; exit 1; fi
       - name: Fake preferences saved by the official build
-        if: steps.need.outputs.skip != 'true'
         run: |
           mkdir -p "$UI_DIR"
           printf '\xef\xbb\xbf{\n  "dark": true,\n  "recent": [\n    "/Users/prova/conti.xlsx"\n  ],\n  "language": "en",\n  "interfaceScale": 125\n}' > "$UI_DIR/ui.json"
       - name: Run the patch
-        if: steps.need.outputs.skip != 'true'
         run: HOME="$GITHUB_WORKSPACE/home" ./mac/Applica-italiano.command
       - name: Check the result
-        if: steps.need.outputs.skip != 'true'
+        env:
+          OFFICIAL: ${{ steps.release.outputs.official }}
         run: |
           v="${TAG#v}"
           app=/Applications/GridCraft.app
@@ -142,6 +147,10 @@ jobs:
           [ "$(/usr/libexec/PlistBuddy -c 'Print :GridCraftVersion' "$app/Contents/Info.plist")" = "$v" ]
           LC_ALL=C grep -a -q 'Italiano' "$app/Contents/MacOS/GridCraft"
           codesign --verify "$app"
+          # With Italian official the patch leaves the official app alone; otherwise it installs ours.
+          signer="$(codesign -dv "$app" 2>&1 | grep -c 'TeamIdentifier=DJ6XS33FX8' || true)"
+          if [ "$OFFICIAL" = true ] && [ "$signer" -ne 1 ]; then echo 'the official app was replaced'; exit 1; fi
+          if [ "$OFFICIAL" != true ] && [ "$signer" -ne 0 ]; then echo 'the Italian build was not installed'; exit 1; fi
           if ls -d /Applications/.GridCraft-* 2>/dev/null; then echo 'left a temporary copy'; exit 1; fi
           [ "$(head -c3 "$UI_DIR/ui.json" | xxd -p)" != efbbbf ]
           test -f "$UI_DIR/ui.json.bak"
@@ -150,10 +159,9 @@ jobs:
               ObjC.import("Foundation");
               const ui = JSON.parse($.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null).js);
               if (ui.language !== "it" || ui.dark !== true || ui.interfaceScale !== 125 || ui.recent[0] !== "/Users/prova/conti.xlsx") throw new Error(JSON.stringify(ui));
-              return "OK: Italian build installed, language set, other preferences kept";
+              return "OK: right app in place, language set, other preferences kept";
             }' "$UI_DIR/ui.json"
       - name: Run the patch again, with no ui.json yet
-        if: steps.need.outputs.skip != 'true'
         run: |
           rm "$UI_DIR/ui.json"
           HOME="$GITHUB_WORKSPACE/home" ./mac/Applica-italiano.command
