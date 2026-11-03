@@ -44,7 +44,9 @@ jobs:
           if ((Get-FileHash $msi).Hash.ToLower() -ne $want) { throw 'official MSI hash mismatch' }
           $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "official install failed: $($p.ExitCode)" }
-          $exe = 'C:\Program Files\GridCraft\gridcraft.exe'
+          # Where the MSI put it (Program Files\ArtCraft\GridCraft since 0.16.0), as the patch reads it.
+          $exe = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe').'(default)'.Trim('"')
+          if (-not (Test-Path -LiteralPath $exe)) { throw "no gridcraft.exe at $exe" }
           if (Select-String -Path $exe -Pattern 'through GDI' -SimpleMatch -Quiet) { throw 'the official build already has the print fix' }
       - name: Fake preferences saved by the official build
         shell: pwsh
@@ -64,7 +66,8 @@ jobs:
             Where-Object DisplayName -eq 'GridCraft')
           if ($entries.Count -ne 1) { throw "expected one GridCraft entry, found $($entries.Count)" }
           if ($entries[0].DisplayVersion -ne $v -or $entries[0].Publisher -ne 'Learning Machines LLC') { throw "entry: $($entries[0].DisplayVersion) / $($entries[0].Publisher)" }
-          $exe = 'C:\Program Files\GridCraft\gridcraft.exe'
+          $exe = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe').'(default)'.Trim('"')
+          if (-not (Test-Path -LiteralPath $exe)) { throw "no gridcraft.exe at $exe" }
           if (-not (Select-String -Path $exe -Pattern 'Italiano' -SimpleMatch -Quiet)) { throw 'gridcraft.exe is not the Italian build' }
           if (-not (Select-String -Path $exe -Pattern 'through GDI' -SimpleMatch -Quiet)) { throw 'gridcraft.exe has no print fix' }
           $file = "$env:APPDATA\GridCraft\ui.json"
